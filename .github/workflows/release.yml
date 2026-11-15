@@ -18,7 +18,7 @@ permissions: {}
 
 jobs:
   release:
-    uses: onelf-pkgs/.github/.github/workflows/pkg-release.yml@8d677e149d5e2492902fba1aba456bd77033831b
+    uses: onelf-pkgs/.github/.github/workflows/pkg-release.yml@b4657c7944a724b350098098694176fe32f83921
     # Exists only in the `release` environment, which main alone may use;
     # the publish job signs self-updates with it.
     secrets:
