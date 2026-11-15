@@ -10,7 +10,7 @@
 # hand when the recipe changes and the sources do not. Releases are
 # tagged v<podman version>-<release>.
 name = "podman"
-release = 3
+release = 4
 arches = ["x86_64", "aarch64"]
 self-update = true
 

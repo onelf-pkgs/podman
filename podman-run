@@ -34,9 +34,11 @@ uid=$(id -u 2>/dev/null) || uid=0
 # launch cannot see this one's tree, and every helper lookup dies
 # with ENOENT. Drop the pause process keeping such a namespace so
 # podman starts from the caller's namespace, where the tree is
-# visible. A namespace that can already see the tree is kept, and one
-# that other live processes still occupy is refused rather than torn
-# down under them.
+# visible. Containers already running from that namespace survive it:
+# they hold their own namespaces, their storage lives on the real
+# filesystem, and a later podman reaches them through the database
+# and conmon sockets. A namespace that can already see the tree is
+# kept.
 drop_saved_ns() {
     run=${XDG_RUNTIME_DIR:-/run/user/$uid}
     pid_file=$run/libpod/tmp/pause.pid
@@ -48,16 +50,6 @@ drop_saved_ns() {
     esac
     grep -aq _PODMAN_PAUSE=1 /proc/$pid/environ 2>/dev/null || return 0
     [ -e "/proc/$pid/root$root/bin/podman" ] && return 0
-    ns=$(readlink /proc/$pid/ns/mnt 2>/dev/null) || return 0
-    for p in /proc/[0-9]*; do
-        p=${p#/proc/}
-        [ "$p" = "$pid" ] && continue
-        [ "$(readlink /proc/$p/ns/mnt 2>/dev/null)" = "$ns" ] || continue
-        echo "podman saved a namespace this tree is not part of," \
-            "and pid $p still runs in it" >&2
-        echo "stop it with the podman that started it, then run again" >&2
-        exit 1
-    done
     kill "$pid" 2>/dev/null
     rm -f "$pid_file" "$run/libpod/tmp/ns_handles"
 }
