@@ -172,6 +172,7 @@ else
     trust="--update-unsigned"
 fi
 
+mkdir -p dist
 onelf pack "$tree" --command podman-run --name podman \
     --level 22 --payload stipple --needs-setuid \
     --update-url "https://github.com/onelf-pkgs/podman/releases/latest/download/podman-$arch.onelf" \
