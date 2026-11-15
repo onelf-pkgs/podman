@@ -88,7 +88,11 @@ bsdtar -xzf "$file" -C "$work"
 src=$work/podman-$version
 cd "$src"
 
-make podman EXTRA_BUILDTAGS=containers_image_openpgp 2>&1 | tail -3
+# -buildvcs=false: the extracted source sits inside the checked-out
+# repository, and go's VCS stamping trips over the ownership mismatch
+# between the checkout and the root container.
+make podman GOFLAGS=-buildvcs=false \
+    EXTRA_BUILDTAGS=containers_image_openpgp 2>&1 | tail -3
 [ -x bin/podman ] || {
     echo "the engine did not build" >&2
     exit 1
