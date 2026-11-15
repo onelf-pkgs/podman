@@ -9,17 +9,17 @@
 # Signature verification uses the pure-Go OpenPGP path, so gpgme and
 # its dependencies stay out of the bundle. The helper stack podman
 # execs comes from the repository's own packages, assembled into bin/
-# beside the engine; the wrapper puts bin/ ahead of PATH, which is
-# where podman looks all of them up.
+# beside the engine; on launch the wrapper writes config files naming
+# the tree's copies by absolute path, which is where podman looks all
+# of them up.
 #
-# Bundling runs before packing, in two steps rather than one `onelf
-# build`: the library bundler rewrites every binary to reach lib/ and
-# that rewrite strips setuid, and the newuidmap, newgidmap and
-# fusermount3 copies must keep theirs. The bits go back after the
-# bundler has done its work, and packing snapshots the modes as they
-# then stand. Packing is explicit rather than recipe-driven for the
-# same reason: pack does not read onelf.toml, and its flags cover
-# everything the package needs.
+# Bundling and packing go through the checked-in recipe: `onelf
+# build` bundles the library closures and packs in one pass, and
+# strip = true keeps the copied libraries lean. The tree carries no
+# newuidmap, newgidmap or fusermount3: those only work with a setuid
+# bit, which no file in a materialized tree can use, so podman takes
+# the host's own copies, giving real multi mapping where shadow is
+# installed and its single-mapping fallback where it is not.
 #
 # Usage: build.sh
 #
@@ -97,15 +97,14 @@ make podman GOFLAGS=-buildvcs=false \
     echo "the engine did not build" >&2
     exit 1
 }
+strip bin/podman
 
 tree=$work/podman
 mkdir -p "$tree/bin"
 cp bin/podman "$tree/bin/podman"
-# -p keeps the setuid bits: podman checks newuidmap carries one before
-# it will use it for rootless mapping, and fusermount3 needs it to
-# mount where the kernel's overlay is out of reach.
-for helper in crun conmon passt fuse-overlayfs netavark aardvark-dns \
-    fusermount3 newuidmap newgidmap
+# The copies ship without setuid bits; see the header for why the
+# mapping and fuse-mount helpers are the host's job.
+for helper in crun conmon passt fuse-overlayfs netavark aardvark-dns
 do
     cp -p "/usr/bin/$helper" "$tree/bin/$helper"
 done
@@ -113,28 +112,16 @@ cp -p /usr/libexec/catatonit/catatonit "$tree/bin/catatonit"
 # pasta is a symlink to passt on the host; podman looks for pasta by
 # name, so the same link goes beside the copy.
 ln -s passt "$tree/bin/pasta"
+# passt execs the .avx2 build beside itself when the CPU has AVX2.
+# aarch64 ships none, and the plain build runs there.
+if [ -f /usr/bin/passt.avx2 ]; then
+    cp -p /usr/bin/passt.avx2 "$tree/bin/passt.avx2"
+fi
 cd "$OLDPWD"
 
-cat > "$tree/podman-run" <<'EOF'
-#!/bin/sh
-# podman execs its helpers by name: crun, conmon, catatonit, pasta,
-# netavark, aardvark-dns, fuse-overlayfs and the setuid newuidmap and
-# newgidmap all come from bin/ beside this script, put ahead of the
-# host's PATH. The caller's working directory is kept: podman resolves
-# relative -v mounts against it.
-self=$0
-while [ -L "$self" ]; do
-    link=$(readlink "$self")
-    case $link in
-    /*) self=$link ;;
-    *) self=${self%/*}/$link ;;
-    esac
-done
-root=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
-PATH=$root/bin:$PATH
-export PATH
-exec "$root/bin/podman" "$@"
-EOF
+# The wrapper is a standalone file next to this script; its header
+# explains the config files and the saved-namespace handling.
+cp podman-run "$tree/podman-run"
 chmod 755 "$tree/podman-run"
 
 for needed in \
@@ -147,9 +134,6 @@ for needed in \
     "$tree/bin/netavark" \
     "$tree/bin/aardvark-dns" \
     "$tree/bin/fuse-overlayfs" \
-    "$tree/bin/fusermount3" \
-    "$tree/bin/newuidmap" \
-    "$tree/bin/newgidmap" \
     "$tree/podman-run"
 do
     [ -e "$needed" ] || {
@@ -158,26 +142,28 @@ do
     }
 done
 
-# The library bundler scans the tree's binaries, copies their closure
-# into lib/ and rewrites them to reach it, clearing the setuid bits of
-# the trio on the way. They go back once the rewriting is done; the
-# packed manifest records modes as they stand at pack time.
-onelf bundle-libs "$tree"
-chmod 4755 "$tree/bin/newuidmap" "$tree/bin/newgidmap" \
-    "$tree/bin/fusermount3"
+if [ -f /usr/bin/passt.avx2 ] && [ ! -e "$tree/bin/passt.avx2" ]; then
+    echo "the tree is missing $tree/bin/passt.avx2" >&2
+    exit 1
+fi
 
 if [ -f update.pub ]; then
-    trust="--update-key $PWD/update.pub"
+    trust="key = \"$PWD/update.pub\""
 else
-    trust="--update-unsigned"
+    trust="unsigned = true"
 fi
 
 mkdir -p dist
-onelf pack "$tree" --command podman-run --name podman \
-    --level 22 --payload stipple --needs-setuid \
-    --update-url "https://github.com/onelf-pkgs/podman/releases/latest/download/podman-$arch.onelf" \
-    --update-revision "$revision" \
-    $trust \
-    -o "dist/podman-$arch.onelf"
+export PODMAN_VERSION=$version
+cp onelf.toml "$tree/onelf.toml"
+cat >> "$tree/onelf.toml" <<EOF
+
+[update]
+url = "https://github.com/onelf-pkgs/podman/releases/latest/download/podman-$arch.onelf"
+revision = $revision
+$trust
+EOF
+
+onelf build "$tree" -o "dist/podman-$arch.onelf"
 
 ls -l dist

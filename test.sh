@@ -36,25 +36,21 @@ packed=dist/podman-$arch.onelf
 onelf verify "$packed"
 
 # The tree inside the package must carry every helper podman execs by
-# name, and the setuid trio with their setuid bit: without it, rootless
-# mapping and fuse mounts fail on a real host.
+# name, executable as extracted.
 extract=$(mktemp -d)
 store=$(mktemp -d)
 conf=$(mktemp)
 trap 'rm -rf "$extract" "$store" "$conf"' EXIT
-# --preserve-mode because this is our own package and the check is the
-# setuid bits themselves; extract masks modes to 0777 without it.
-onelf extract "$packed" -o "$extract" --preserve-mode \
+onelf extract "$packed" -o "$extract" \
     --file bin/podman \
     --file bin/crun --file bin/conmon --file bin/catatonit \
-    --file bin/passt \
+    --file bin/passt --file bin/passt.avx2 \
     --file bin/netavark --file bin/aardvark-dns \
-    --file bin/fuse-overlayfs \
-    --file bin/fusermount3 --file bin/newuidmap --file bin/newgidmap
+    --file bin/fuse-overlayfs
 # pasta is a symlink to passt, so the extraction carries the binary and
 # the link is checked in the manifest.
 list=$(onelf list "$packed")
-for helper in podman crun conmon catatonit pasta passt netavark \
+for helper in podman crun conmon catatonit pasta passt passt.avx2 netavark \
     aardvark-dns fuse-overlayfs
 do
     case $list in
@@ -65,18 +61,11 @@ do
         ;;
     esac
 done
-for helper in conmon crun catatonit passt netavark \
+for helper in conmon crun catatonit passt passt.avx2 netavark \
     aardvark-dns fuse-overlayfs
 do
     [ -x "$extract/bin/$helper" ] || {
         echo "bin/$helper did not extract as an executable" >&2
-        exit 1
-    }
-done
-for helper in fusermount3 newuidmap newgidmap; do
-    mode=$(stat -c '%a' "$extract/bin/$helper")
-    [ "$mode" = 4755 ] || {
-        echo "bin/$helper lost its setuid bit (mode $mode)" >&2
         exit 1
     }
 done
@@ -92,4 +81,4 @@ export _CONTAINERS_USERNS_CONFIGURED=done
 "$packed" --version | grep -q "podman version $version"
 "$packed" version | grep -q "$version"
 
-echo "podman-$arch: verify, helpers, setuid bits and engine ok"
+echo "podman-$arch: verify, helpers and engine ok"

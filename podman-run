@@ -1,0 +1,111 @@
+#!/bin/sh
+# podman resolves its helpers through fixed, compiled-in locations:
+# conmon and crun from lists of absolute paths, netavark and
+# aardvark-dns from helper_binaries_dir with no PATH fallback at all.
+# None of that reaches bin/ beside this script on its own, so each
+# launch writes a containers.conf and a storage.conf naming the tree's
+# copies by absolute path and points the CONTAINERS_* environment at
+# them. The copies cannot live anywhere else: the bundler rewrites
+# every binary in the tree to load through onelf's own runtime, which
+# only resolves inside the materialized tree, so a copy of a helper
+# outside it fails with "open interp". The tree itself is reachable
+# everywhere podman needs it, as long as this launch's mount is the
+# one in view, which is what the namespace handling below secures.
+# A caller who set the variables already has their own setup and is
+# left alone. The caller's working directory is kept: podman resolves
+# relative -v mounts against it.
+
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in
+    /*) self=$link ;;
+    *) self=${self%/*}/$link ;;
+    esac
+done
+root=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+
+uid=$(id -u 2>/dev/null) || uid=0
+
+# Rootless podman saves the user and mount namespaces of its first run
+# in $XDG_RUNTIME_DIR/libpod/tmp/pause.pid, and every later run joins
+# that saved namespace before any of its own code runs. Each launch of
+# this package mounts a fresh tree, so a namespace saved by an earlier
+# launch cannot see this one's tree, and every helper lookup dies
+# with ENOENT. Drop the pause process keeping such a namespace so
+# podman starts from the caller's namespace, where the tree is
+# visible. A namespace that can already see the tree is kept, and one
+# that other live processes still occupy is refused rather than torn
+# down under them.
+drop_saved_ns() {
+    run=${XDG_RUNTIME_DIR:-/run/user/$uid}
+    pid_file=$run/libpod/tmp/pause.pid
+    [ -f "$pid_file" ] || return 0
+    pid=
+    read -r pid < "$pid_file" || :
+    case $pid in
+    '' | *[!0-9]*) return 0 ;;
+    esac
+    grep -aq _PODMAN_PAUSE=1 /proc/$pid/environ 2>/dev/null || return 0
+    [ -e "/proc/$pid/root$root/bin/podman" ] && return 0
+    ns=$(readlink /proc/$pid/ns/mnt 2>/dev/null) || return 0
+    for p in /proc/[0-9]*; do
+        p=${p#/proc/}
+        [ "$p" = "$pid" ] && continue
+        [ "$(readlink /proc/$p/ns/mnt 2>/dev/null)" = "$ns" ] || continue
+        echo "podman saved a namespace this tree is not part of," \
+            "and pid $p still runs in it" >&2
+        echo "stop it with the podman that started it, then run again" >&2
+        exit 1
+    done
+    kill "$pid" 2>/dev/null
+    rm -f "$pid_file" "$run/libpod/tmp/ns_handles"
+}
+drop_saved_ns
+
+# pasta brings the container's network up through the tap device, and
+# the tap lives behind /dev/net/tun, a node the tun kernel module
+# creates. Missing it costs a full image pull before podman reports a
+# bare "pasta failed", so say what is wrong up front.
+case ${1:-} in
+run | start)
+    [ -c /dev/net/tun ] || echo "warning: /dev/net/tun is missing on this" \
+        "host; container networking will fail until the tun module is" \
+        "loaded (for example: modprobe tun)" >&2
+    ;;
+esac
+
+conf=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}
+conf=$conf/onelf-podman-$uid
+mkdir -p "$conf" || {
+    conf=/tmp/onelf-podman-$uid
+    mkdir -p "$conf"
+}
+
+if [ -z "${CONTAINERS_CONF:-}" ]; then
+    cat > "$conf/containers.conf" <<CONF
+[engine]
+conmon_path = ["$root/bin/conmon"]
+helper_binaries_dir = ["$root/bin"]
+
+[containers]
+init_path = "$root/bin/catatonit"
+runtime_path = ["$root/bin/crun"]
+CONF
+    CONTAINERS_CONF=$conf/containers.conf
+    export CONTAINERS_CONF
+fi
+
+if [ -z "${CONTAINERS_STORAGE_CONF:-}" ]; then
+    cat > "$conf/storage.conf" <<CONF
+[storage.options.overlay]
+mount_program = "$root/bin/fuse-overlayfs"
+CONF
+    CONTAINERS_STORAGE_CONF=$conf/storage.conf
+    export CONTAINERS_STORAGE_CONF
+fi
+
+CONTAINERS_HELPER_BINARY_DIR=$root/bin
+PATH=$root/bin:$PATH
+export CONTAINERS_HELPER_BINARY_DIR PATH
+exec "$root/bin/podman" "$@"

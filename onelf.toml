@@ -1,0 +1,27 @@
+# The onelf recipe for the assembled tree: build.sh copies this into
+# the tree root and exports what the ${...} placeholder names, which
+# onelf expands when it loads the recipe. Nothing here names this
+# machine or this architecture.
+[package]
+name = "podman"
+command = "podman-run"
+version = "${PODMAN_VERSION}"
+description = "A tool for managing OCI containers and pods"
+license = "Apache-2.0"
+homepage = "https://podman.io"
+working-dir = "inherit"
+needs-setuid = true
+exclude = ["onelf.toml"]
+
+[[entrypoint]]
+name = "podman"
+path = "podman-run"
+default = true
+sets = []
+
+[bundle]
+strip = true
+
+[compression]
+level = 22
+payload = "stipple"
