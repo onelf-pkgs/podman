@@ -41,16 +41,19 @@ extract=$(mktemp -d)
 store=$(mktemp -d)
 conf=$(mktemp)
 trap 'rm -rf "$extract" "$store" "$conf"' EXIT
-onelf extract "$packed" -o "$extract" \
-    --file bin/podman \
-    --file bin/crun --file bin/conmon --file bin/catatonit \
-    --file bin/passt --file bin/passt.avx2 \
-    --file bin/netavark --file bin/aardvark-dns \
-    --file bin/fuse-overlayfs
+# passt.avx2 exists only where Void ships it; the build skips the copy
+# elsewhere, and the checks below follow the same condition.
+files="--file bin/podman --file bin/crun --file bin/conmon \
+--file bin/catatonit --file bin/passt --file bin/netavark \
+--file bin/aardvark-dns --file bin/fuse-overlayfs"
+if [ -f /usr/bin/passt.avx2 ]; then
+    files="$files --file bin/passt.avx2"
+fi
+onelf extract "$packed" -o "$extract" $files
 # pasta is a symlink to passt, so the extraction carries the binary and
 # the link is checked in the manifest.
 list=$(onelf list "$packed")
-for helper in podman crun conmon catatonit pasta passt passt.avx2 netavark \
+for helper in podman crun conmon catatonit pasta passt netavark \
     aardvark-dns fuse-overlayfs
 do
     case $list in
@@ -61,7 +64,7 @@ do
         ;;
     esac
 done
-for helper in conmon crun catatonit passt passt.avx2 netavark \
+for helper in conmon crun catatonit passt netavark \
     aardvark-dns fuse-overlayfs
 do
     [ -x "$extract/bin/$helper" ] || {
@@ -69,6 +72,19 @@ do
         exit 1
     }
 done
+if [ -f /usr/bin/passt.avx2 ]; then
+    case $list in
+    *"bin/passt.avx2"*) : ;;
+    *)
+        echo "the package is missing bin/passt.avx2" >&2
+        exit 1
+        ;;
+    esac
+    [ -x "$extract/bin/passt.avx2" ] || {
+        echo "bin/passt.avx2 did not extract as an executable" >&2
+        exit 1
+    }
+fi
 
 # The engine reports itself through the wrapper: a bare invocation and
 # the full version, which walks the runtime path and stands up the vfs
