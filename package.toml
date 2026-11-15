@@ -1,0 +1,20 @@
+# Podman for onelf: the daemonless container engine packed as one file
+# per architecture, with the helper stack it execs beside it: crun,
+# conmon, catatonit, pasta, netavark, aardvark-dns, fuse-overlayfs, and
+# the setuid newuidmap, newgidmap and fusermount3 that rootless
+# operation needs.
+#
+# The control repository, onelf-pkgs/.github, bumps the sources here
+# when upstream releases and resets `release` to 1. Raise `release` by
+# hand when the recipe changes and the sources do not. Releases are
+# tagged v<podman version>-<release>.
+name = "podman"
+release = 1
+arches = ["x86_64", "aarch64"]
+self-update = true
+
+[sources.podman]
+version = "6.2.0"
+url = "https://github.com/containers/podman/archive/refs/tags/v{version}.tar.gz"
+sha256 = "cb182273c5c5e3ea079f8f88a9a30a574d247f80e0b9dd9c02df1d2e6f6f3705"
+upstream = { github = "containers/podman", tag = "^v([0-9.]+)$" }
